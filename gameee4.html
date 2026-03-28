@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aqua Celestia</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;overflow:hidden}
+html,body{width:100%;height:100%;background:#000;font-family:'Segoe UI',sans-serif}
+canvas{display:block;width:100%;height:100%}
+#ui-overlay{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
+#theme-panel{position:absolute;top:12px;right:12px;pointer-events:auto;display:flex;flex-direction:column;gap:6px;opacity:0;transition:opacity 1s}
+#theme-panel.show{opacity:1}
+.theme-btn{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.85);padding:6px 14px;border-radius:20px;cursor:pointer;font-size:11px;transition:all 0.3s;backdrop-filter:blur(8px);letter-spacing:0.5px}
+.theme-btn:hover{background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.4);transform:scale(1.05)}
+.theme-btn.active{background:rgba(255,255,255,0.25);border-color:rgba(255,255,255,0.5)}
+#info-panel{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);pointer-events:none;text-align:center;color:rgba(255,255,255,0.5);font-size:11px;letter-spacing:1px;opacity:0;transition:opacity 2s}
+#info-panel.show{opacity:1}
+#title-screen{position:fixed;top:0;left:0;width:100%;height:100%;z-index:100;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#0a0a1a;transition:opacity 2s}
+#title-screen.fade{opacity:0;pointer-events:none}
+#title-text{color:rgba(200,220,255,0.9);font-size:clamp(24px,5vw,48px);letter-spacing:8px;font-weight:300;margin-bottom:20px;text-shadow:0 0 40px rgba(100,150,255,0.3)}
+#start-btn{background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.6);padding:10px 36px;border-radius:30px;cursor:pointer;font-size:13px;letter-spacing:3px;transition:all 0.5s}
+#start-btn:hover{background:rgba(255,255,255,0.15);color:rgba(255,255,255,0.9);transform:scale(1.05)}
+#zone-label{position:absolute;top:50px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.4);font-size:12px;letter-spacing:3px;opacity:0;transition:opacity 1.5s;pointer-events:none}
+#zone-label.show{opacity:1}
+#constellation-info{position:absolute;bottom:50px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,0.5);font-size:11px;letter-spacing:1px;opacity:0;transition:opacity 1s;pointer-events:none}
+#minimap{position:absolute;bottom:12px;right:12px;width:120px;height:120px;border-radius:50%;border:1px solid rgba(255,255,255,0.15);pointer-events:none;opacity:0;transition:opacity 1s;overflow:hidden}
+#minimap.show{opacity:0.7}
+#minimap canvas{border-radius:50%}
+</style>
+</head>
+<body>
+<div id="title-screen">
+<div id="title-text">AQUA CELESTIA</div>
+<button id="start-btn" onclick="startGame()">AWAKEN</button>
+</div>
+<canvas id="game"></canvas>
+<div id="ui-overlay">
+<div id="theme-panel">
+<button class="theme-btn active" onclick="setTheme(0)">☀️ Sunny</button>
+<button class="theme-btn" onclick="setTheme(1)">🌧️ Rainy</button>
+<button class="theme-btn" onclick="setTheme(2)">🔮 Purple</button>
+<button class="theme-btn" onclick="setTheme(3)">✨ Astral</button>
+<button class="theme-btn" onclick="setTheme(4)">🔥 Ember</button>
+<button class="theme-btn" onclick="setTheme(5)">🌌 Aurora</button>
+<button class="theme-btn" onclick="setTheme(6)">🌫️ Misty</button>
+</div>
+<div id="info-panel">WASD to float · SHIFT to sprint · SPACE to interact · CLICK stars to connect</div>
+<div id="zone-label"></div>
+<div id="constellation-info"></div>
+<div id="minimap"><canvas id="minimap-canvas" width="120" height="120"></canvas></div>
+</div>
+
+<script>
+const C=document.getElementById('game');
+const ctx=C.getContext('2d');
+const MC=document.getElementById('minimap-canvas');
+const mctx=MC.getContext('2d');
+
+let W,H;
+function resize(){W=C.width=window.innerWidth;H=C.height=window.innerHeight}
+resize();
+window.addEventListener('resize',resize);
+
+// Game state
+let gameStarted=false, introPhase=0, introTimer=0;
+const WORLD_W=8000, WORLD_H=8000;
+
+// Themes
+const themes=[
+{name:'Sunny',sky1:'#1a3a6a',sky2:'#f0c070',ambient:[255,240,200],fog:0,rain:0,stars:0.2,particle:[255,240,180]},
+{name:'Rainy',sky1:'#2a3040',sky2:'#4a5060',ambient:[150,170,200],fog:0.3,rain:1,stars:0.1,particle:[150,180,220]},
+{name:'Purple',sky1:'#1a0a2e',sky2:'#4a1060',ambient:[180,100,220],fog:0.15,rain:0,stars:0.6,particle:[200,120,255]},
+{name:'Astral',sky1:'#0a0a2a',sky2:'#1a1050',ambient:[100,120,200],fog:0.05,rain:0,stars:1,particle:[120,150,255]},
+{name:'Ember',sky1:'#2a1500',sky2:'#c06020',ambient:[255,180,100],fog:0.1,rain:0,stars:0.15,particle:[255,160,60]},
+{name:'Aurora',sky1:'#050a15',sky2:'#0a1520',ambient:[80,200,150],fog:0.05,rain:0,stars:0.8,particle:[100,255,180]},
+{name:'Misty',sky1:'#1a2030',sky2:'#3a4050',ambient:[180,190,200],fog:0.5,rain:0,stars:0.3,particle:[200,210,220]}
+];
+let currentTheme=0,targetTheme=0,themeBlend=1;
+let prevThemeData=themes[0],curThemeData=themes[0];
+
+// Player
+const player={x:WORLD_W/2,y:WORLD_H/2,vx:0,vy:0,glow:0,pulse:0,trail:[],ripples:[],interactCooldown:0};
+
+// Camera
+const cam={x:WORLD_W/2,y:WORLD_H/2,tx:WORLD_W/2,ty:WORLD_H/2,shake:0};
+
+// Input
+const keys={};
+let mouseX=0,mouseY=0,mouseDown=false,mouseClicked=false;
+window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;e.preventDefault()});
+window.addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false});
+window.addEventListener('mousemove',e=>{mouseX=e.clientX;mouseY=e.clientY});
+window.addEventListener('mousedown',e=>{mouseDown=true;mouseClicked=true});
+window.addEventListener('mouseup',e=>{mouseDown=false});
+window.addEventListener('touchstart',e=>{if(e.touches[0]){mouseX=e.touches[0].clientX;mouseY=e.touches[0].clientY;mouseDown=true;mouseClicked=true}});
+window.addEventListener('touchend',e=>{mouseDown=false});
+
+// World objects
+let stars=[],clouds=[],islands=[],particles=[],raindrops=[],worldFeatures=[];
+let constellationLines=[],activeStars=[],nearestStar=null;
+let discoveredZones=new Set();
+
+// Seeded random
+function seeded(s){return function(){s=Math.sin(s*9301+49297)%1;return s<0?-s:s}}
+const srand=seeded(42);
+
+function generateWorld(){
+ // Stars
+ for(let i=0;i<300;i++){
+  stars.push({x:srand()*WORLD_W,y:srand()*WORLD_H,size:0.5+srand()*2,brightness:0.3+srand()*0.7,twinkle:srand()*Math.PI*2,speed:0.5+srand()*2,connectable:srand()>0.5,connected:false,constellation:-1,hue:srand()*60-30});
+ }
+
+ // Clouds
+ for(let i=0;i<80;i++){
+  clouds.push({x:srand()*WORLD_W,y:srand()*WORLD_H,w:100+srand()*300,h:40+srand()*100,speed:0.1+srand()*0.3,opacity:0.1+srand()*0.3,type:Math.floor(srand()*3)});
+ }
+
+ // Islands/features
+ const featureTypes=['island','shrine','pool','coral','bridge','cove','waterfall','lantern','fountain','ruins'];
+ for(let i=0;i<60;i++){
+  let ft=featureTypes[Math.floor(srand()*featureTypes.length)];
+  worldFeatures.push({x:srand()*WORLD_W,y:srand()*WORLD_H,type:ft,size:30+srand()*80,glow:0,activated:false,pulse:srand()*Math.PI*2,color:srand()});
+ }
+
+ // Initial particles
+ for(let i=0;i<150;i++){
+  spawnParticle(srand()*WORLD_W,srand()*WORLD_H);
+ }
+}
+
+function spawnParticle(x,y,vx,vy){
+ if(particles.length>400)return;
+ particles.push({x,y,vx:(vx||0)+(Math.random()-0.5)*0.3,vy:(vy||0)+(Math.random()-0.5)*0.3,life:1,maxLife:3+Math.random()*5,size:1+Math.random()*3,alpha:0.3+Math.random()*0.5});
+}
+
+function startGame(){
+ document.getElementById('title-screen').classList.add('fade');
+ setTimeout(()=>{
+  document.getElementById('title-screen').style.display='none';
+  gameStarted=true;
+  introPhase=1;
+  introTimer=0;
+  generateWorld();
+  setTimeout(()=>{
+   document.getElementById('theme-panel').classList.add('show');
+   document.getElementById('info-panel').classList.add('show');
+   document.getElementById('minimap').classList.add('show');
+  },5000);
+ },2000);
+}
+
+function setTheme(t){
+ document.querySelectorAll('.theme-btn').forEach((b,i)=>b.classList.toggle('active',i===t));
+ if(t===currentTheme)return;
+ prevThemeData=lerpThemeData(prevThemeData,curThemeData,themeBlend);
+ targetTheme=t;
+ curThemeData=themes[t];
+ themeBlend=0;
+ currentTheme=t;
+}
+
+function lerpThemeData(a,b,t){
+ return{
+  sky1:lerpColor(a.sky1,b.sky1,t),
+  sky2:lerpColor(a.sky2,b.sky2,t),
+  ambient:a.ambient.map((v,i)=>v+(b.ambient[i]-v)*t),
+  fog:a.fog+(b.fog-a.fog)*t,
+  rain:a.rain+(b.rain-a.rain)*t,
+  stars:a.stars+(b.stars-a.stars)*t,
+  particle:a.particle.map((v,i)=>v+(b.particle[i]-v)*t)
+ };
+}
+
+function lerpColor(c1,c2,t){
+ let r1=parseInt(c1.slice(1,3),16),g1=parseInt(c1.slice(3,5),16),b1=parseInt(c1.slice(5,7),16);
+ let r2=parseInt(c2.slice(1,3),16),g2=parseInt(c2.slice(3,5),16),b2=parseInt(c2.slice(5,7),16);
+ let r=Math.round(r1+(r2-r1)*t),g=Math.round(g1+(g2-g1)*t),b=Math.round(b1+(b2-b1)*t);
+ return`#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+}
+
+function hexToRgb(h){return[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]}
+
+let time=0,dt=0,lastTime=0;
+
+function getTheme(){
+ themeBlend=Math.min(1,themeBlend+dt*0.5);
+ return lerpThemeData(prevThemeData,curThemeData,themeBlend);
+}
+
+function updatePlayer(){
+ if(introPhase<3)return;
+ let speed=1.8;
+ let sprint=keys['shift'];
+ if(sprint)speed=4.5;
+
+ let ax=0,ay=0;
+ if(keys['w']||keys['arrowup'])ay=-1;
+ if(keys['s']||keys['arrowdown'])ay=1;
+ if(keys['a']||keys['arrowleft'])ax=-1;
+ if(keys['d']||keys['arrowright'])ax=1;
+
+ if(ax!==0&&ay!==0){ax*=0.707;ay*=0.707}
+
+ player.vx+=(ax*speed-player.vx)*0.08;
+ player.vy+=(ay*speed-player.vy)*0.08;
+
+ player.x+=player.vx;
+ player.y+=player.vy;
+
+ // World bounds
+ player.x=Math.max(50,Math.min(WORLD_W-50,player.x));
+ player.y=Math.max(50,Math.min(WORLD_H-50,player.y));
+
+ // Collision with features
+ for(let f of worldFeatures){
+  if(f.type==='island'){
+   let dx=player.x-f.x,dy=player.y-f.y,dist=Math.sqrt(dx*dx+dy*dy);
+   if(dist<f.size*0.6){
+    let push=f.size*0.6-dist;
+    player.x+=dx/dist*push*0.3;
+    player.y+=dy/dist*push*0.3;
+   }
+  }
+ }
+
+ player.pulse+=dt*2;
+ player.glow=0.7+Math.sin(player.pulse)*0.3;
+
+ // Trail
+ let spd=Math.sqrt(player.vx*player.vx+player.vy*player.vy);
+ if(spd>0.3){
+  player.trail.push({x:player.x,y:player.y,alpha:1,size:3+spd});
+  if(spd>0.5&&Math.random()<0.3)spawnParticle(player.x+(Math.random()-0.5)*10,player.y+(Math.random()-0.5)*10,-player.vx*0.1,-player.vy*0.1);
+ }
+ player.trail=player.trail.filter(t=>{t.alpha-=dt*0.8;return t.alpha>0});
+
+ // Ripples on water
+ if(spd>0.5&&Math.random()<0.1){
+  player.ripples.push({x:player.x,y:player.y,r:5,maxR:30+spd*10,alpha:0.5});
+ }
+ player.ripples=player.ripples.filter(r=>{r.r+=dt*30;r.alpha-=dt*0.5;return r.alpha>0});
+
+ // Interact
+ if(player.interactCooldown>0)player.interactCooldown-=dt;
+
+ if(keys[' ']&&player.interactCooldown<=0){
+  player.interactCooldown=0.5;
+  for(let f of worldFeatures){
+   let dx=player.x-f.x,dy=player.y-f.y;
+   if(Math.sqrt(dx*dx+dy*dy)<f.size+30){
+    f.activated=true;f.glow=2;
+    player.ripples.push({x:f.x,y:f.y,r:5,maxR:80,alpha:0.8});
+    for(let i=0;i<10;i++)spawnParticle(f.x+(Math.random()-0.5)*20,f.y+(Math.random()-0.5)*20);
+   }
+  }
+ }
+
+ // Star clicking/connecting
+ if(mouseClicked){
+  let wx=mouseX+cam.x-W/2, wy=mouseY+cam.y-H/2;
+  let closest=null,closestDist=60;
+  for(let s of stars){
+   if(!s.connectable)continue;
+   let dx=s.x-wx,dy=s.y-wy,d=Math.sqrt(dx*dx+dy*dy);
+   if(d<closestDist){closestDist=d;closest=s}
+  }
+  if(closest){
+   if(activeStars.length>0&&activeStars[activeStars.length-1]!==closest){
+    let last=activeStars[activeStars.length-1];
+    let dx=closest.x-last.x,dy=closest.y-last.y;
+    if(Math.sqrt(dx*dx+dy*dy)<400){
+     constellationLines.push({x1:last.x,y1:last.y,x2:closest.x,y2:closest.y,alpha:0,targetAlpha:0.7});
+     closest.connected=true;last.connected=true;
+     for(let i=0;i<8;i++)spawnParticle(closest.x+(Math.random()-0.5)*20,closest.y+(Math.random()-0.5)*20);
+    }
+   }
+   activeStars.push(closest);
+   if(activeStars.length>20)activeStars.shift();
+  }
+ }
+ mouseClicked=false;
+
+ // Nearest star highlight
+ nearestStar=null;
+ let wx2=mouseX+cam.x-W/2, wy2=mouseY+cam.y-H/2;
+ let nd=80;
+ for(let s of stars){
+  if(!s.connectable)continue;
+  let dx=s.x-wx2,dy=s.y-wy2,d=Math.sqrt(dx*dx+dy*dy);
+  if(d<nd){nd=d;nearestStar=s}
+ }
+
+ // Zone detection
+ let zone='';
+ let relY=player.y/WORLD_H;
+ if(relY<0.35)zone='STARWEAVE';
+ else if(relY<0.65)zone='CLOUDREST';
+ else zone='TIDEFLOW';
+
+ let zl=document.getElementById('zone-label');
+ if(!discoveredZones.has(zone)){
+  discoveredZones.add(zone);
+  zl.textContent='~ '+zone+' ~';
+  zl.classList.add('show');
+  setTimeout(()=>zl.classList.remove('show'),3000);
+ }
+}
+
+function updateCamera(){
+ cam.tx=player.x;cam.ty=player.y;
+ cam.x+=(cam.tx-cam.x)*0.04;
+ cam.y+=(cam.ty-cam.y)*0.04;
+}
+
+function updateParticles(){
+ for(let p of particles){
+  p.x+=p.vx;p.y+=p.vy;
+  p.life-=dt/p.maxLife;
+  p.vx*=0.99;p.vy*=0.99;
+  p.vx+=(Math.random()-0.5)*0.02;
+  p.vy+=(Math.random()-0.5)*0.02;
+ }
+ particles=particles.filter(p=>p.life>0);
+
+ // Spawn ambient
+ if(particles.length<200&&Math.random()<0.1){
+  spawnParticle(cam.x+(Math.random()-0.5)*W*1.5,cam.y+(Math.random()-0.5)*H*1.5);
+ }
+}
+
+function drawSky(theme){
+ let g=ctx.createLinearGradient(0,0,0,H);
+ let c1=hexToRgb(theme.sky1),c2=hexToRgb(theme.sky2);
+ g.addColorStop(0,`rgb(${c1[0]},${c1[1]},${c1[2]})`);
+ g.addColorStop(1,`rgb(${c2[0]},${c2[1]},${c2[2]})`);
+ ctx.fillStyle=g;
+ ctx.fillRect(0,0,W,H);
+}
+
+function drawStars(theme){
+ let vis=theme.stars;
+ if(vis<0.05)return;
+ for(let s of stars){
+  let sx=s.x-cam.x+W/2, sy=s.y-cam.y+H/2;
+  if(sx<-20||sx>W+20||sy<-20||sy>H+20)continue;
+
+  s.twinkle+=dt*s.speed;
+  let tw=0.5+Math.sin(s.twinkle)*0.5;
+  let a=s.brightness*tw*vis;
+  if(a<0.01)continue;
+
+  let sz=s.size*(s.connected?2:1);
+  let hue=200+s.hue;
+
+  // Glow
+  let grd=ctx.createRadialGradient(sx,sy,0,sx,sy,sz*4);
+  grd.addColorStop(0,`hsla(${hue},80%,90%,${a*0.8})`);
+  grd.addColorStop(0.3,`hsla(${hue},70%,70%,${a*0.3})`);
+  grd.addColorStop(1,`hsla(${hue},60%,50%,0)`);
+  ctx.fillStyle=grd;
+  ctx.fillRect(sx-sz*4,sy-sz*4,sz*8,sz*8);
+
+  // Core
+  ctx.beginPath();ctx.arc(sx,sy,sz*0.6,0,Math.PI*2);
+  ctx.fillStyle=`hsla(${hue},60%,95%,${a})`;
+  ctx.fill();
+
+  // Highlight nearest
+  if(s===nearestStar){
+   ctx.beginPath();ctx.arc(sx,sy,12,0,Math.PI*2);
+   ctx.strokeStyle=`rgba(255,255,255,${0.3+Math.sin(time*4)*0.2})`;
+   ctx.lineWidth=1;ctx.stroke();
+  }
+ }
+}
+
+function drawConstellationLines(){
+ for(let l of constellationLines){
+  l.alpha+=(l.targetAlpha-l.alpha)*0.05;
+  let x1=l.x1-cam.x+W/2, y1=l.y1-cam.y+H/2;
+  let x2=l.x2-cam.x+W/2, y2=l.y2-cam.y+H/2;
+  ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);
+  ctx.strokeStyle=`rgba(180,200,255,${l.alpha})`;
+  ctx.lineWidth=1.5;ctx.stroke();
+
+  // Glow
+  ctx.strokeStyle=`rgba(120,160,255,${l.alpha*0.3})`;
+  ctx.lineWidth=4;ctx.stroke();
+ }
+}
+
+function drawClouds(theme){
+ for(let c of clouds){
+  c.x+=c.speed;
+  if(c.x>WORLD_W+200)c.x=-300;
+
+  let sx=c.x-cam.x+W/2, sy=c.y-cam.y+H/2;
+  if(sx<-400||sx>W+400||sy<-200||sy>H+200)continue;
+
+  let amb=theme.ambient;
+  ctx.globalAlpha=c.opacity*(0.5+theme.fog);
+
+  // Cloud shape - multiple ellipses
+  for(let i=0;i<3;i++){
+   let ox=(i-1)*c.w*0.25;
+   let oy=Math.sin(i+time*0.2)*5;
+   ctx.beginPath();
+   ctx.ellipse(sx+ox,sy+oy,c.w*(0.3+i*0.05),c.h*(0.4+i*0.1),0,0,Math.PI*2);
+   ctx.fillStyle=`rgba(${amb[0]},${amb[1]},${amb[2]},0.15)`;
+   ctx.fill();
+  }
+  ctx.globalAlpha=1;
+ }
+}
+
+function drawWater(theme){
+ // Water region (bottom half of world in view)
+ let waterY=WORLD_H*0.6-cam.y+H/2;
+
+ if(waterY>H)return;
+ let startY=Math.max(0,waterY);
+
+ // Water gradient
+ let amb=theme.ambient;
+ let g=ctx.createLinearGradient(0,startY,0,H);
+ g.addColorStop(0,`rgba(${Math.min(255,amb[0]*0.3)},${Math.min(255,amb[1]*0.4)},${Math.min(255,amb[2]*0.6)},0.4)`);
+ g.addColorStop(1,`rgba(${Math.min(255,amb[0]*0.15)},${Math.min(255,amb[1]*0.2)},${Math.min(255,amb[2]*0.4)},0.6)`);
+ ctx.fillStyle=g;
+ ctx.fillRect(0,startY,W,H-startY);
+
+ // Wave lines
+ ctx.globalAlpha=0.15;
+ for(let i=0;i<8;i++){
+  let wy=startY+i*(H-startY)/8;
+  ctx.beginPath();
+  for(let x=0;x<W;x+=4){
+   let wx=x+cam.x;
+   let offset=Math.sin(wx*0.005+time+i)*8+Math.sin(wx*0.01+time*1.3)*4;
+   if(x===0)ctx.moveTo(x,wy+offset);
+   else ctx.lineTo(x,wy+offset);
+  }
+  ctx.strokeStyle=`rgba(${amb[0]},${amb[1]},${amb[2]},0.3)`;
+  ctx.lineWidth=1;
+  ctx.stroke();
+ }
+ ctx.globalAlpha=1;
+
+ // Reflection shimmer
+ for(let i=0;i<20;i++){
+  let rx=(Math.sin(i*7.3+time*0.5)*0.5+0.5)*W;
+  let ry=startY+(Math.sin(i*3.1+time*0.3)*0.5+0.5)*(H-startY);
+  let rw=20+Math.sin(i*2+time)*10;
+  ctx.globalAlpha=0.03+Math.sin(i+time)*0.02;
+  ctx.fillStyle=`rgba(255,255,255,1)`;
+  ctx.fillRect(rx-rw/2,ry-1,rw,2);
+ }
+ ctx.globalAlpha=1;
+}
+
+function drawWorldFeatures(theme){
+ let amb=theme.ambient;
+ for(let f of worldFeatures){
+  let sx=f.x-cam.x+W/2, sy=f.y-cam.y+H/2;
+  if(sx<-100||sx>W+100||sy<-100||sy>H+100)continue;
+
+  f.pulse+=dt*1.5;
+  if(f.glow>0)f.glow-=dt*0.5;
+
+  let baseAlpha=0.3+(f.activated?0.3:0)+f.glow*0.3;
+  let sz=f.size;
+
+  switch(f.type){
+   case 'island':
+    ctx.beginPath();ctx.arc(sx,sy,sz*0.5,0,Math.PI*2);
+    let ig=ctx.createRadialGradient(sx,sy,0,sx,sy,sz*0.5);
+    ig.addColorStop(0,`rgba(${amb[0]*0.5},${amb[1]*0.6},${amb[2]*0.4},${baseAlpha})`);
+    ig.addColorStop(1,`rgba(${amb[0]*0.3},${amb[1]*0.4},${amb[2]*0.3},0)`);
+    ctx.fillStyle=ig;ctx.fill();
+    break;
+   case 'shrine':
+    let sg=ctx.createRadialGradient(sx,sy,0,sx,sy,sz*0.6);
+    sg.addColorStop(0,`rgba(255,240,200,${baseAlpha*0.6+Math.sin(f.pulse)*0.1})`);
+    sg.addColorStop(0.5,`rgba(200,180,255,${baseAlpha*0.3})`);
+    sg.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=sg;ctx.fillRect(sx-sz*0.6,sy-sz*0.6,sz*1.2,sz*1.2);
+    ctx.fillStyle=`rgba(255,250,230,${baseAlpha*0.8})`;
+    ctx.fillRect(sx-2,sy-sz*0.25,4,sz*0.5);
+    ctx.beginPath();ctx.arc(sx,sy-sz*0.25,5,0,Math.PI*2);ctx.fill();
+    break;
+   case 'pool':
+    ctx.beginPath();ctx.ellipse(sx,sy,sz*0.5,sz*0.3,0,0,Math.PI*2);
+    let pg=ctx.createRadialGradient(sx,sy,0,sx,sy,sz*0.4);
+    pg.addColorStop(0,`rgba(100,180,255,${baseAlpha*0.4})`);
+    pg.addColorStop(1,`rgba(50,100,200,0)`);
+    ctx.fillStyle=pg;ctx.fill();
+    break;
+   case 'coral':
+    for(let i=0;i<5;i++){
+     let cx=sx+Math.sin(i*1.3)*sz*0.3;
+     let cy=sy+Math.cos(i*1.7)*sz*0.2;
+     let cr=3+Math.sin(f.pulse+i)*2;
+     let hue=f.color*60+180;
+     ctx.beginPath();ctx.arc(cx,cy,cr,0,Math.PI*2);
+     ctx.fillStyle=`hsla(${hue},60%,60%,${baseAlpha*0.6})`;
+     ctx.fill();
+    }
+    break;
+   case 'lantern':
+    let lGlow=0.5+Math.sin(f.pulse)*0.3;
+    let lg=ctx.createRadialGradient(sx,sy,0,sx,sy,sz*0.4);
+    lg.addColorStop(0,`rgba(255,220,150,${lGlow*baseAlpha})`);
+    lg.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=lg;ctx.fillRect(sx-sz*0.4,sy-sz*0.4,sz*0.8,sz*0.8);
+    ctx.beginPath();ctx.arc(sx,sy,3,0,Math.PI*2);
+    ctx.fillStyle=`rgba(255,240,200,${baseAlpha})`;ctx.fill();
+    break;
+   case 'fountain':
+    let fy=sy-Math.abs(Math.sin(f.pulse*2))*15;
+    ctx.beginPath();ctx.arc(sx,fy,4,0,Math.PI*2);
+    ctx.fillStyle=`rgba(180,220,255,${baseAlpha*0.6})`;ctx.fill();
+    let fg=ctx.createRadialGradient(sx,sy,0,sx,sy,sz*0.3);
+    fg.addColorStop(0,`rgba(150,200,255,${baseAlpha*0.3})`);
+    fg.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=fg;ctx.fillRect(sx-sz*0.3,sy-sz*0.3,sz*0.6,sz*0.6);
+    break;
+   default:
+    let dg=ctx.createRadialGradient(sx,sy,0,sx,sy,sz*0.4);
+    dg.addColorStop(0,`rgba(${amb[0]},${amb[1]},${amb[2]},${baseAlpha*0.3})`);
+    dg.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=dg;ctx.fillRect(sx-sz*0.4,sy-sz*0.4,sz*0.8,sz*0.8);
+  }
+ }
+}
+
+function drawParticles(theme){
+ let pc=theme.particle;
+ for(let p of particles){
+  let sx=p.x-cam.x+W/2, sy=p.y-cam.y+H/2;
+  if(sx<-10||sx>W+10||sy<-10||sy>H+10)continue;
+  let a=p.life*p.alpha;
+  ctx.beginPath();ctx.arc(sx,sy,p.size,0,Math.PI*2);
+  ctx.fillStyle=`rgba(${pc[0]},${pc[1]},${pc[2]},${a*0.5})`;
+  ctx.fill();
+ }
+}
+
+function drawRain(theme){
+ if(theme.rain<0.1)return;
+ if(raindrops.length<100*theme.rain){
+  raindrops.push({x:cam.x+(Math.random()-0.5)*W*1.5,y:cam.y-H/2-Math.random()*100,vy:4+Math.random()*3,life:1});
+ }
+ ctx.strokeStyle=`rgba(180,200,220,${0.15*theme.rain})`;
+ ctx.lineWidth=1;
+ for(let r of raindrops){
+  r.y+=r.vy;r.x+=0.3;
+  let sx=r.x-cam.x+W/2, sy=r.y-cam.y+H/2;
+  if(sy>H+10)r.life=0;
+  if(sx<-10||sx>W+10)continue;
+  ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx+1,sy+8);ctx.stroke();
+ }
+ raindrops=raindrops.filter(r=>r.life>0);
+}
+
+function drawAurora(theme){
+ if(currentTheme!==5&&themeBlend>0.9)return;
+ let auroraStrength=currentTheme===5?themeBlend:1-themeBlend;
+ if(auroraStrength<0.01)return;
+
+ for(let i=0;i<5;i++){
+  ctx.beginPath();
+  let baseY=H*0.15+i*25;
+  for(let x=0;x<=W;x+=8){
+   let y=baseY+Math.sin(x*0.003+time*0.3+i*0.7)*30+Math.sin(x*0.007+time*0.5+i)*15;
+   if(x===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  }
+  let hue=120+i*15+Math.sin(time*0.2)*10;
+  ctx.strokeStyle=`hsla(${hue},70%,55%,${0.08*auroraStrength})`;
+  ctx.lineWidth=20+i*5;
+  ctx.stroke();
+
+  ctx.strokeStyle=`hsla(${hue},80%,70%,${0.04*auroraStrength})`;
+  ctx.lineWidth=40+i*10;
+  ctx.stroke();
+ }
+}
+
+function drawPlayer(theme){
+ let sx=player.x-cam.x+W/2, sy=player.y-cam.y+H/2;
+ let amb=theme.ambient;
+
+ // Trail
+ for(let t of player.trail){
+  let tx=t.x-cam.x+W/2, ty=t.y-cam.y+H/2;
+  ctx.beginPath();ctx.arc(tx,ty,t.size*t.alpha,0,Math.PI*2);
+  ctx.fillStyle=`rgba(${amb[0]},${amb[1]},${amb[2]},${t.alpha*0.2})`;
+  ctx.fill();
+ }
+
+ // Ripples
+ for(let r of player.ripples){
+  let rx=r.x-cam.x+W/2, ry=r.y-cam.y+H/2;
+  ctx.beginPath();ctx.arc(rx,ry,r.r,0,Math.PI*2);
+  ctx.strokeStyle=`rgba(${amb[0]},${amb[1]},${amb[2]},${r.alpha*0.3})`;
+  ctx.lineWidth=1.5;ctx.stroke();
+ }
+
+ // Outer glow
+ let g3=ctx.createRadialGradient(sx,sy,0,sx,sy,40);
+ g3.addColorStop(0,`rgba(${amb[0]},${amb[1]},${amb[2]},${0.1*player.glow})`);
+ g3.addColorStop(1,'rgba(0,0,0,0)');
+ ctx.fillStyle=g3;ctx.fillRect(sx-40,sy-40,80,80);
+
+ // Mid glow
+ let g2=ctx.createRadialGradient(sx,sy,0,sx,sy,15);
+ g2.addColorStop(0,`rgba(255,250,240,${0.4*player.glow})`);
+ g2.addColorStop(0.5,`rgba(${amb[0]},${amb[1]},${amb[2]},${0.2*player.glow})`);
+ g2.addColorStop(1,'rgba(0,0,0,0)');
+ ctx.fillStyle=g2;ctx.fillRect(sx-15,sy-15,30,30);
+
+ // Core
+ ctx.beginPath();ctx.arc(sx,sy,3+Math.sin(player.pulse)*0.5,0,Math.PI*2);
+ ctx.fillStyle=`rgba(255,252,245,${0.9*player.glow})`;
+ ctx.fill();
+
+ // Inner bright
+ ctx.beginPath();ctx.arc(sx,sy,1.5,0,Math.PI*2);
+ ctx.fillStyle=`rgba(255,255,255,${player.glow})`;
+ ctx.fill();
+}
+
+function drawFog(theme){
+ if(theme.fog<0.01)return;
+ ctx.globalAlpha=theme.fog*0.3;
+ let amb=theme.ambient;
+ ctx.fillStyle=`rgb(${amb[0]*0.5},${amb[1]*0.5},${amb[2]*0.5})`;
+ ctx.fillRect(0,0,W,H);
+ ctx.globalAlpha=1;
+}
+
+function drawMinimap(){
+ mctx.clearRect(0,0,120,120);
+ mctx.fillStyle='rgba(10,15,30,0.7)';
+ mctx.fillRect(0,0,120,120);
+
+ let scale=120/WORLD_W;
+
+ // Features
+ for(let f of worldFeatures){
+  mctx.fillStyle=f.activated?'rgba(255,220,150,0.5)':'rgba(100,120,150,0.3)';
+  mctx.fillRect(f.x*scale-1,f.y*scale-1,2,2);
+ }
+
+ // Constellation lines
+ mctx.strokeStyle='rgba(150,180,255,0.3)';
+ mctx.lineWidth=0.5;
+ for(let l of constellationLines){
+  mctx.beginPath();mctx.moveTo(l.x1*scale,l.y1*scale);mctx.lineTo(l.x2*scale,l.y2*scale);mctx.stroke();
+ }
+
+ // Player
+ let px=player.x*scale,py=player.y*scale;
+ mctx.beginPath();mctx.arc(px,py,3,0,Math.PI*2);
+ mctx.fillStyle='rgba(255,255,255,0.9)';mctx.fill();
+
+ // View area
+ let vx=(cam.x-W/2)*scale,vy=(cam.y-H/2)*scale;
+ let vw=W*scale,vh=H*scale;
+ mctx.strokeStyle='rgba(255,255,255,0.2)';
+ mctx.lineWidth=1;
+ mctx.strokeRect(vx,vy,vw,vh);
+}
+
+function drawIntro(){
+ let theme=themes[0];
+ drawSky(theme);
+
+ // Mirror ocean
+ let waterLine=H*0.55;
+ let g=ctx.createLinearGradient(0,waterLine,0,H);
+ g.addColorStop(0,'rgba(40,60,100,0.3)');
+ g.addColorStop(1,'rgba(20,30,60,0.5)');
+ ctx.fillStyle=g;
+ ctx.fillRect(0,waterLine,W,H-waterLine);
+
+ // Subtle waves
+ for(let i=0;i<5;i++){
+  ctx.beginPath();
+  for(let x=0;x<W;x+=4){
+   let y=waterLine+i*20+Math.sin(x*0.005+time+i*0.5)*5;
+   if(x===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle=`rgba(200,220,255,${0.05-i*0.008})`;
+  ctx.lineWidth=1;ctx.stroke();
+ }
+
+ // Clouds
+ for(let i=0;i<6;i++){
+  let cx=W*(0.1+i*0.15)+Math.sin(time*0.1+i)*20;
+  let cy=H*0.2+i*15;
+  ctx.beginPath();ctx.ellipse(cx,cy,80+i*20,15+i*5,0,0,Math.PI*2);
+  ctx.fillStyle=`rgba(200,180,220,${0.05})`;ctx.fill();
+ }
+
+ introTimer+=dt;
+
+ if(introPhase===1){
+  // Calm silence, then light appears
+  if(introTimer>2){
+   introPhase=2;introTimer=0;
+  }
+ }
+
+ if(introPhase>=2){
+  let t=Math.min(1,introTimer/3);
+  let cx=W/2,cy=H*0.5;
+
+  // Rising from water
+  let rise=t*30;
+  cy-=rise;
+
+  // Glow grows
+  let glowSize=5+t*25;
+  let gAlpha=t*0.6;
+
+  // Outer
+  let og=ctx.createRadialGradient(cx,cy,0,cx,cy,glowSize*2);
+  og.addColorStop(0,`rgba(200,220,255,${gAlpha*0.3})`);
+  og.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=og;ctx.fillRect(cx-glowSize*2,cy-glowSize*2,glowSize*4,glowSize*4);
+
+  // Mid
+  let mg=ctx.createRadialGradient(cx,cy,0,cx,cy,glowSize);
+  mg.addColorStop(0,`rgba(255,250,240,${gAlpha*0.6})`);
+  mg.addColorStop(0.5,`rgba(200,210,255,${gAlpha*0.3})`);
+  mg.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=mg;ctx.fillRect(cx-glowSize,cy-glowSize,glowSize*2,glowSize*2);
+
+  // Core
+  ctx.beginPath();ctx.arc(cx,cy,2+t*2,0,Math.PI*2);
+  ctx.fillStyle=`rgba(255,255,255,${gAlpha})`;ctx.fill();
+
+  // Ripples from center
+  for(let i=0;i<3;i++){
+   let rr=(introTimer*20+i*20)%80;
+   let ra=Math.max(0,0.3-rr/80*0.3)*t;
+   ctx.beginPath();ctx.arc(W/2,H*0.52,rr,0,Math.PI*2);
+   ctx.strokeStyle=`rgba(200,220,255,${ra})`;ctx.lineWidth=1;ctx.stroke();
+  }
+
+  // Particles emerging
+  if(t>0.3){
+   for(let i=0;i<5;i++){
+    let angle=Math.sin(time*2+i*1.3)*Math.PI;
+    let dist=(t-0.3)*40+Math.sin(time+i)*10;
+    let px=cx+Math.cos(angle)*dist;
+    let py=cy+Math.sin(angle)*dist;
+    let pa=(t-0.3)*0.3;
+    ctx.beginPath();ctx.arc(px,py,1.5,0,Math.PI*2);
+    ctx.fillStyle=`rgba(220,230,255,${pa})`;ctx.fill();
+   }
+  }
+
+  if(introTimer>4){
+   introPhase=3;
+   player.x=WORLD_W/2;player.y=WORLD_H*0.5;
+   cam.x=player.x;cam.y=player.y;
+  }
+ }
+}
+
+function gameLoop(timestamp){
+ if(!lastTime)lastTime=timestamp;
+ dt=Math.min(0.05,(timestamp-lastTime)/1000);
+ lastTime=timestamp;
+ time+=dt;
+
+ ctx.clearRect(0,0,W,H);
+
+ if(!gameStarted){
+  // Title background
+  let g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0a0a1a');g.addColorStop(1,'#1a1530');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+
+  // Ambient stars
+  for(let i=0;i<50;i++){
+   let x=(Math.sin(i*73.1+time*0.1)*0.5+0.5)*W;
+   let y=(Math.cos(i*91.3+time*0.05)*0.5+0.5)*H;
+   let a=0.2+Math.sin(i+time)*0.15;
+   ctx.beginPath();ctx.arc(x,y,1,0,Math.PI*2);
+   ctx.fillStyle=`rgba(200,210,255,${a})`;ctx.fill();
+  }
+ }else if(introPhase<3){
+  drawIntro();
+ }else{
+  let theme=getTheme();
+
+  updatePlayer();
+  updateCamera();
+  updateParticles();
+
+  // Render layers
+  drawSky(theme);
+  drawAurora(theme);
+  drawStars(theme);
+  drawConstellationLines();
+  drawClouds(theme);
+  drawWater(theme);
+  drawWorldFeatures(theme);
+  drawParticles(theme);
+  drawRain(theme);
+  drawPlayer(theme);
+  drawFog(theme);
+
+  // Vignette
+  let vg=ctx.createRadialGradient(W/2,H/2,W*0.3,W/2,H/2,W*0.7);
+  vg.addColorStop(0,'rgba(0,0,0,0)');
+  vg.addColorStop(1,'rgba(0,0,0,0.3)');
+  ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);
+
+  drawMinimap();
+ }
+
+ requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
